@@ -40,9 +40,7 @@ class FullScanner(threading.Thread):
         while True:
             while not frameQ.empty():
                 t_start = time.time()
-                print(f"Scanner started")
                 self.facesQ.put(scan(self.frameQ.get()))
-                print(f"Scanner done in {time.time() - t_start}")
             time.sleep(0.1)
 
 def scan(frame):
@@ -60,16 +58,14 @@ frameQ.put(next(framegen))  # fill the first frame for the scanner
 fullScanner.start()
 
 faces = []
-
+t_old = time.time()
 for framenum in range(numframes):
-    t_start = time.time()
     # frame = hdmi_in.readframe()
     frame = next(framegen)
     if frameQ.empty() and not facesQ.empty():
         # scanner is done
         frameQ.put(frame)
         faces = facesQ.get()
-        print(f"#faces: {len(faces)}")
 
     size_inc = 50
     for facenum, (x, y, w, h) in enumerate(faces):
@@ -90,6 +86,10 @@ for framenum in range(numframes):
     cv2.imshow('frame', frame)
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
+
+    t_new = time.time()
+    print(f"\rfps: {1/(t_new - t_old)}", end="")
+    t_old = t_new
 #     print(f"dt: {time.time()-t_start}; #faces: {len(faces)}")
 #     hdmi_out.writeframe(frame)
 
