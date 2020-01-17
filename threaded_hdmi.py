@@ -19,6 +19,7 @@ class FPGA_Connection():
         self.port_h = 0x28
         self.port_OnOffToggle = 0x30
         self.On = True
+        self.turnOn()
 
     def writeSquare(x, y, w, h)
         #port x
@@ -29,6 +30,14 @@ class FPGA_Connection():
         self.write(self.port_w, w)
         #port h
         self.write(self.port_h, h) 
+
+    def turnOn():
+        self.on = True
+        self.write(self.port_OnOffToggle, int(self.on))
+
+    def turnOff():
+        self.on = False
+        self.write(self.port_OnOffToggle, int(self.on))
 
     def toggle():
         self.on = not self.on
@@ -49,11 +58,8 @@ class FullScanner(threading.Thread):
 
     def run(self):
         while True:
-            while not frameQ.empty():
-                t_start = time.time()
-                print(f"Scanner started")
+            while not frameQ.empty() and self.running:
                 self.facesQ.put(scan(self.frameQ.get()))
-                print(f"Scanner done in {time.time() - t_start}")
 
 def scan(frame):
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -88,6 +94,7 @@ dtprint("HDMI video streams started")
 # hdmi_in.tie(hdmi_out)
 # dtprint("HDMI video tied")
 
+FPGA = FPGA_Connection()
 
 frameQ = Queue()
 facesQ = Queue()
@@ -97,7 +104,6 @@ fullScanner.daemon = True
 frameQ.put(hdmi_in.readframe())  # fill the first frame for the scanner
 fullScanner.start()
 
-faces = []
 t_started = time.time()
 t_start = t_started
 
@@ -107,20 +113,18 @@ for framenum in range(numframes):
     
     frame = hdmi_in.readframe()
     if frameQ.empty() and not facesQ.empty():
-        # scanner is done
         frameQ.put(frame)
         faces = facesQ.get()
         print(f"#faces: {len(faces)}")
-
-    size_inc = 50
-    for facenum, (x, y, w, h) in enumerate(faces):
-        cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 255, 0), 2)
+        if len(faces) > 0:
+            FPGA.writeSquare(*faces[0])
+    
     hdmi_out.writeframe(frame)
     
     # timings and report
-    end_time = time.time()
-    dt = end_time - t_start
-    t_start = end_time
+    # end_time = time.time()
+    # dt = end_time - t_start
+    # t_start = end_time
     # if not framenum % 100:
     #     print(f"avg fps: {framenum/(end_time-t_started):.2f}, cur fps: {1/dt:.2f}, faces {len(faces)}")
     
