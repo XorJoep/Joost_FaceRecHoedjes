@@ -3,6 +3,7 @@ import numpy as np
 import time
 import threading
 from queue import Queue
+import asyncio
 
 from pynq import Overlay
 from pynq import MMIO
@@ -95,6 +96,18 @@ dtprint("HDMI video streams started")
 # dtprint("HDMI video tied")
 
 FPGA = FPGA_Connection()
+dtprint("Created fgpa object")
+
+@asyncio.coroutine
+def wait_for_button(num):
+    while True:
+        yield from base.buttons[num].wait_for_value_async(1)
+        if base.buttons[num].read():
+            FPGA.toggle()
+            yield from asyncio.sleep(0.1)
+
+button_task = asyncio.ensure_future(wait_for_button(0))
+dtprint("Created button task")
 
 frameQ = Queue()
 facesQ = Queue()
@@ -133,5 +146,6 @@ fullScanner.running = False
 
 hdmi_out.close()
 hdmi_in.close()
+button_task.cancel()
 
 dtprint("HDMI Closed")
