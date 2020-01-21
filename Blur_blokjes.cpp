@@ -61,10 +61,11 @@ void hfilt(pixel_stream &src, pixel_stream &dst, uint16_t face_x, uint16_t face_
 	else if ((x >= face_x && x <= face_x + face_w) && (y >= face_y && y <= face_y + face_h)){
 
 		if (((x-face_x) % 8) == 0 && ((y-face_y) % 8) == 0) {
-			pixel_buffer[(x-face_x)/8] = dr;
+			dn = pixel_buffer[(x-face_x)/8] = dr;
 		}
-
+		else {
 		dn = pixel_buffer[(x-face_x)/8];
+		}
 	}
 	else {
 		dn = dr;
