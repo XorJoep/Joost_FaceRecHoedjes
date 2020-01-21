@@ -5,6 +5,9 @@
 #define WIDTH 1280
 #define HEIGHT 720
 
+#define WINDOW_SIZE 3
+#define HALF_SIZE (((WINDOW_SIZE) - 1) / 2)
+
 #define GR(v) ((v)&0xFF)
 #define GG(v) (((v)&0xFF00)>>8)
 #define GB(v) (((v)&0xFF0000)>>16)
@@ -15,7 +18,44 @@
 typedef ap_axiu<32,1,1,1> pixel_data;
 typedef hls::stream<pixel_data> pixel_stream;
 
-void hfilt(pixel_stream &src, pixel_stream &dst, uint16_t face_x, uint16_t face_y, uint16_t face_w, uint16_t face_h, bool switch_is_on)
+const uint8_t kernel[WINDOW_SIZE][WINDOW_SIZE] = 
+	{
+		1, 2, 1, 
+		2, 4, 2, 
+		1, 2, 1
+	};
+
+inline bool within_face(uint16_t x, uint16_t y,
+	uint16_t face_x, uint16_t face_y, uint16_t face_w, uint16_t face_h)
+{
+	return x >= face_x && x <= face_x + face_w && y >= face_y && y <= face_y + face_h;
+}
+
+inline uint32_t blur(uint32_t window[WINDOW_SIZE][WINDOW_SIZE], 
+	uint16_t x, uint16_t y,
+	uint16_t face_x, uint16_t face_y, uint16_t face_w, uint16_t face_h )
+{
+	uint16_t sum_red = 0;
+	uint16_t sum_green = 0;
+	uint16_t sum_blue = 0;
+	for (uint8_t i = -HALF_SIZE; i <= HALF_SIZE; i++)
+		for (uint8_t j = -HALF_SIZE; j <= HALF_SIZE; j++)
+			if (within_face(x + i, y + j, face_x, face_y, face_w, face_h)) {
+				uint8_t k_val = kernel[i + HALF_SIZE][j + HALF_SIZE];
+				uint32_t pixel = window[i + HALF_SIZE][j + HALF_SIZE];
+				sum_red += GR(pixel) * k_val;
+				sum_green += GG(pixel) * k_val;
+				sum_blue += GB(pixel) * k_val;
+			}
+	return SR(sum_red / 16) + SG(sum_green / 16) + SB(sum_blue / 16);
+}
+
+
+
+
+void face_blurrer(pixel_stream &src, pixel_stream &dst, 
+	uint16_t face_x, uint16_t face_y, uint16_t face_w, uint16_t face_h, 
+	uint8_t switch_is_on)
 {
 #pragma HLS INTERFACE ap_ctrl_none port=return
 #pragma HLS INTERFACE axis port=&src
@@ -25,13 +65,25 @@ void hfilt(pixel_stream &src, pixel_stream &dst, uint16_t face_x, uint16_t face_
 #pragma HLS INTERFACE s_axilite port=face_w
 #pragma HLS INTERFACE s_axilite port=face_h
 #pragma HLS INTERFACE s_axilite port=switch_is_on
-#pragma HLS PIPELINE II=1
 
 	// Data to be stored across 'function calls'
 	static uint16_t x = 0;
 	static uint16_t y = 0;
-	static uint16_t frame_data [WIDTH*3] = { };
-	static float kernel [9] = {0.066, 0.066, 0.066, 0.066, 0.11, 0.11, 0.066, 0.11, 0.34};
+
+	uint32_t pixel_in;
+	uint32_t pixel_out;
+	uint32_t line_buf[WINDOW_SIZE - 1][WIDTH]; // matrix buffering pixeldata
+
+	  // Load initial values into line buffer
+	uint32_t read_count = WIDTH * HALF_SIZE + HALF_SIZE + 1;
+	buf_x1 : for (int x = WIDTH - HALF_SIZE - 1; x < WIDTH; x++)
+		#pragma HLS PIPELINE
+		line_buf[HALF_SIZE - 1][x] = src.read();
+		buf_y : for (int y = HALF_SIZE; y < WIN_SIZE - 1; y++)
+			buf_x2 : for (int x = 0; x < WIDTH; x++)
+				#pragma HLS PIPELINE
+				// line_buf[y][x] = in_stream.read();
+				src >> line_buf[y][x]
 
 
 	pixel_data p_in;
@@ -39,65 +91,38 @@ void hfilt(pixel_stream &src, pixel_stream &dst, uint16_t face_x, uint16_t face_
 	// Load input data from source
 	src >> p_in;
 
-	// Reset X and Y counters on user signal
-	if (p_in.user)
-		x = y = 0;
-
 	////////////////////////////////
 
 	// Pixel data to be stored across 'function calls'
-	static pixel_data p_out = p_in;
+	// static pixel_data p_out = p_in;
 	//static uint32_t dl = 0;
 	//static uint32_t dc = 0;
 
 	// Current (incoming) pixel data
-	uint32_t dr = p_in.data;
-	uint32_t dn;
+	uint32_t pixel_in = p_in.data;
+
 	// Compute outgoing pixel data
-	if (switch_is_on){
-		dn = dr;
-	}
-	else if ((x >= face_x && x <= face_x + face_w) && (y >= face_y && y <= face_y + face_h)){
-		static float sumred = 0;
-		static float sumgreen = 0;
-		static float sumblue = 0;
-		static int inface_x = x-face_x;
-		static int inface_y = y-face_y;
-
-		if (x <= face_x+1 || y <= face_y + 1 || y >= face_y + face_h - 1) {// On the edge
-			frame_data[WIDTH*inface_y+inface_x] = dr;
-		}
-		else{
-
-		frame_data[WIDTH*inface_y+inface_x] = dr;
-		for (int i = -2; i <= 0; i++) {
-		        for (int j = -2; j <= 0; j++) {
-		        	static uint16_t pixel_data = frame_data[WIDTH*(inface_y+j)+inface_x+i];
-		        	sumred += GR(pixel_data) * kernel[i+2+(2+j)*3];
-		        	sumgreen += GG(pixel_data) * kernel[i+2+(2+j)*3];
-		        	sumblue += GB(pixel_data) * kernel[i+2+(2+j)*3];
-		        }
+	swith (mode) {
+		case 0:
+			pixel_out = pixel_in;
+			break;
+		case 1:
+			if (within_face(x, y, face_x, face_y, face_w, face_y)) {
+				pixel_out = blur(window, x, y)
 			}
-		dn =
-				SR( (int) sumred>>8) +
-				SG( (int) sumgreen>>8) +
-				SB( (int) sumblue>>8);
-
-
-
-		}
+			break;
+		case 2:
+			// Horizontale pixel out
+			break;
+		case 3:
+			// pixelate blok
+			break;
+		case 4:
+			// blok pixel met blur
+			break;
+		default:
+			break;
 	}
-	else {
-		dn = dr;
-	}
-	//uint32_t dn =
-	//		SR((GR(dl)*l+GR(dc)*c+GR(dr)*r)>>8) +
-	//		SG((GG(dl)*l+GG(dc)*c+GG(dr)*r)>>8) +
-	//		SB((GB(dl)*l+GB(dc)*c+GB(dr)*r)>>8);
-
-	// Move one pixel to the right
-	//dl = dc;
-	//dc = dr;
 
 	p_out.data = dn;
 
@@ -112,9 +137,9 @@ void hfilt(pixel_stream &src, pixel_stream &dst, uint16_t face_x, uint16_t face_
 	// Increment X and Y counters
 	if (p_in.last)
 	{
-		x = 0;
-		y++;
+			x = 0;
+			y++;
 	}
 	else
-		x++;
+			x++;
 }
